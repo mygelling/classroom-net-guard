@@ -165,7 +165,10 @@ namespace StudentService
                     {
                         // http 白名单：转发请求，并对响应做下载管控（替代浏览器扩展）
                         // 注意：ReadHeadAsync 剥离了头部终止符，转发时必须补回 \r\n\r\n，否则上游等不到完整请求
-                        var headBytes = Encoding.ASCII.GetBytes(head + "\r\n\r\n");
+                        // 注意：浏览器发给代理的是“绝对形式”请求行（GET http://host/...），
+                        // 上游服务器通常只接受“原始形式”（GET /path...），必须改写后再转发，否则返回 400/404。
+                        var rewrittenHead = RewriteRequestLine(head);
+                        var headBytes = Encoding.ASCII.GetBytes(rewrittenHead + "\r\n\r\n");
                         await up.WriteAsync(headBytes, 0, headBytes.Length);
                         if (rest != null && rest.Length > 0)
                             await up.WriteAsync(rest, 0, rest.Length);
@@ -283,6 +286,29 @@ namespace StudentService
                 if (int.TryParse(p, out var port)) return (h, port);
             }
             return (authority, defaultPort);
+        }
+
+        /// <summary>把“绝对形式”请求行改写为“原始形式”：GET http://host/path → GET /path。</summary>
+        static string RewriteRequestLine(string head)
+        {
+            var lines = head.Split("\r\n");
+            if (lines.Length == 0) return head;
+            var parts = lines[0].Split(' ');
+            if (parts.Length >= 3 &&
+                (parts[1].StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                 parts[1].StartsWith("https://", StringComparison.OrdinalIgnoreCase)))
+            {
+                try
+                {
+                    var u = new Uri(parts[1]);
+                    var target = u.PathAndQuery;
+                    if (string.IsNullOrEmpty(target)) target = "/";
+                    lines[0] = parts[0] + " " + target + " " + parts[2];
+                    return string.Join("\r\n", lines);
+                }
+                catch { }
+            }
+            return head;
         }
 
         // ===== 转发与响应 =====
