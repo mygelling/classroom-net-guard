@@ -187,7 +187,7 @@ namespace StudentService
                         await up.WriteAsync(headBytes, 0, headBytes.Length);
                         if (rest != null && rest.Length > 0)
                             await up.WriteAsync(rest, 0, rest.Length);
-                        await PumpHttpWithDownloadCheckAsync(stream, up, host);
+                        await PumpHttpWithDownloadCheckAsync(stream, up, host, head);
                     }
                 }
                 else
@@ -331,8 +331,10 @@ namespace StudentService
         /// <summary>
         /// http 响应转发 + 下载管控（原浏览器扩展职责，现由代理承担）：
         /// 读响应头判定是否下载及是否符合下载策略，拦截则返回提示页，放行则继续转发。
+        /// 代理为"单连接单请求"模型：转发完完整响应体（Content-Length / chunked / EOF 界定）即结束，
+        /// 并把响应头改写为 Connection: close，避免浏览器 keep-alive 复用同一连接导致后续请求无人处理而转圈。
         /// </summary>
-        async Task PumpHttpWithDownloadCheckAsync(Stream dst, Stream src, string host)
+        async Task PumpHttpWithDownloadCheckAsync(Stream dst, Stream src, string host, string requestHead)
         {
             var (head, rest) = await ReadHeadAsync(src);
             if (head == null) return;
@@ -347,13 +349,110 @@ namespace StudentService
                 return;
             }
 
+            // 改写 Connection 头为 close：代理单连接只服务一个请求，连接保持反而会让浏览器复用后卡住
+            head = Regex.Replace(head, "(?im)^Connection:.*$", "Connection: close");
+            head = Regex.Replace(head, "(?im)^Keep-Alive:.*$", "");
+
             var hb = Encoding.ASCII.GetBytes(head + "\r\n\r\n");
             await dst.WriteAsync(hb, 0, hb.Length);
             if (rest != null && rest.Length > 0)
                 await dst.WriteAsync(rest, 0, rest.Length);
 
-            var t1 = PumpAsync(src, dst);
-            await t1;
+            // HEAD 请求无响应体
+            if (requestHead.StartsWith("HEAD ", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            var lower = head.ToLowerInvariant();
+
+            long cl = -1;
+            var clm = Regex.Match(lower, "content-length:\\s*(\\d+)");
+            if (clm.Success) long.TryParse(clm.Groups[1].Value, out cl);
+
+            if (cl >= 0)
+            {
+                // 已转发 rest（body 开头），补齐剩余 Content-Length 字节
+                var remaining = cl - (rest?.Length ?? 0);
+                if (remaining > 0) await CopyExactlyAsync(dst, src, remaining);
+                return;
+            }
+
+            if (lower.Contains("transfer-encoding: chunked"))
+            {
+                await PumpChunkedAsync(dst, src, rest ?? Array.Empty<byte>());
+                return;
+            }
+
+            // 无长度头：EOF 界定（上游会关闭连接）
+            var t = PumpAsync(src, dst);
+            await t;
+        }
+
+        static async Task CopyExactlyAsync(Stream dst, Stream src, long count)
+        {
+            var buf = new byte[16384];
+            while (count > 0)
+            {
+                var n = await src.ReadAsync(buf, 0, (int)Math.Min(buf.Length, count));
+                if (n <= 0) return;
+                await dst.WriteAsync(buf, 0, n);
+                count -= n;
+            }
+        }
+
+        /// <summary>chunked 响应体转发：解析并原样转发各 chunk，读到 0 终止块（含 trailer）后结束。</summary>
+        async Task PumpChunkedAsync(Stream dst, Stream src, byte[] rest)
+        {
+            int pos = 0;          // rest 消费位置
+            var buf = new byte[16384];
+
+            async Task<int> ReadByteAsync()
+            {
+                if (pos < rest.Length) return rest[pos++];
+                var n = await src.ReadAsync(buf, 0, 1);
+                return n <= 0 ? -1 : buf[0];
+            }
+
+            async Task<string> ReadLineAsync()
+            {
+                var sb = new System.Text.StringBuilder();
+                while (true)
+                {
+                    var b = await ReadByteAsync();
+                    if (b < 0) return null;
+                    if (b == 10)
+                    {
+                        if (sb.Length > 0 && sb[sb.Length - 1] == '\r') sb.Length--;
+                        return sb.ToString();
+                    }
+                    sb.Append((char)b);
+                }
+            }
+
+            while (true)
+            {
+                var line = await ReadLineAsync();
+                if (line == null) return;
+                var hex = line.Trim();
+                var semi = hex.IndexOf(';');
+                if (semi >= 0) hex = hex.Substring(0, semi).Trim();
+                if (!int.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out var size))
+                    return;
+                await WriteAsciiAsync(dst, line + "\r\n");
+                if (size == 0)
+                {
+                    // trailer 直到空行
+                    while (true)
+                    {
+                        var tl = await ReadLineAsync();
+                        if (tl == null) return;
+                        await WriteAsciiAsync(dst, tl + "\r\n");
+                        if (tl.Length == 0) return;
+                    }
+                }
+                await CopyExactlyAsync(dst, src, size);
+                await ReadLineAsync(); // 消费 chunk 后 CRLF
+                await WriteAsciiAsync(dst, "\r\n");
+            }
         }
 
         /// <summary>按响应头判断是否为下载，并对照下载策略决定是否拦截。</summary>
