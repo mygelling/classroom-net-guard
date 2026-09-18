@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>StudentInstaller</AssemblyName>
+    <RootNamespace>StudentInstaller</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- 学生端程序包（服务+托盘+扩展），随安装器一起发布为单文件 -->
+    <EmbeddedResource Include="..\..\installer\student.zip" LogicalName="student.zip" />
+  </ItemGroup>
+</Project>

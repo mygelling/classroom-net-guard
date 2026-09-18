@@ -1,0 +1,27 @@
+# ===== 构建产物 =====
+bin/
+obj/
+publish/
+*.zip
+
+# ===== IDE / VS 缓存 =====
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# ===== 日志与临时文件 =====
+*.log
+logs/
+*.tmp
+*.bak
+*_test.ps1
+
+# ===== 系统文件 =====
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ===== 运行时数据（教师端/学生端本机状态，不入库）=====
+ProgramData/

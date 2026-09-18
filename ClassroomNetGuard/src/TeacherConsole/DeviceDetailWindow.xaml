@@ -1,0 +1,67 @@
+<Window x:Class="TeacherConsole.DeviceDetailWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="设备详情" Width="420" Height="340" MinWidth="380" MinHeight="300"
+        WindowStartupLocation="CenterOwner" Background="#EDF1EF" ResizeMode="NoResize">
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock x:Name="TxtTitle" FontSize="17" FontWeight="Bold" Foreground="#1A2622" VerticalAlignment="Center"/>
+            <TextBlock x:Name="TxtStatus" Grid.Column="1" FontSize="12" FontWeight="Bold" VerticalAlignment="Center" Margin="10,0,0,0"/>
+        </Grid>
+
+        <Grid Grid.Row="1" Margin="0,14,0,0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="88"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="计算机名" FontSize="12" Foreground="#7C8A85"/>
+            <TextBlock x:Name="TxtSeat" Grid.Column="1" FontSize="12.5" FontFamily="Consolas" Foreground="#1A2622" TextTrimming="CharacterEllipsis"/>
+            <TextBlock Grid.Row="1" Text="IP 地址" FontSize="12" Foreground="#7C8A85" Margin="0,8,0,0"/>
+            <TextBlock x:Name="TxtIp" Grid.Row="1" Grid.Column="1" FontSize="12.5" FontFamily="Consolas" Foreground="#1A2622" Margin="0,8,0,0"/>
+            <TextBlock Grid.Row="2" Text="登录用户" FontSize="12" Foreground="#7C8A85" Margin="0,8,0,0"/>
+            <TextBlock x:Name="TxtUser" Grid.Row="2" Grid.Column="1" FontSize="12.5" Foreground="#1A2622" Margin="0,8,0,0" TextTrimming="CharacterEllipsis"/>
+            <TextBlock Grid.Row="3" Text="最后在线" FontSize="12" Foreground="#7C8A85" Margin="0,8,0,0"/>
+            <TextBlock x:Name="TxtLastSeen" Grid.Row="3" Grid.Column="1" FontSize="12.5" Foreground="#1A2622" Margin="0,8,0,0"/>
+        </Grid>
+
+        <DockPanel Grid.Row="2" Margin="0,18,0,0">
+            <TextBlock Text="解锁密码" FontSize="12" Foreground="#7C8A85" VerticalAlignment="Center" DockPanel.Dock="Left"/>
+            <Button DockPanel.Dock="Right" Content="设置" Width="72" Height="26" Margin="8,0,0,0"
+                    Background="#0E7C66" Foreground="White" FontWeight="Bold" BorderThickness="0"
+                    Click="SetPwd_Click" ToolTip="设置后学生可在拦截页输入该密码临时解锁上网 30 分钟；留空点设置=清除"/>
+            <Button DockPanel.Dock="Right" Content="默认密码" Width="86" Height="26" Margin="8,0,0,0"
+                    Background="#E4E9E7" Foreground="#1A2622" FontWeight="Bold" BorderThickness="0"
+                    Click="GenDefaultPwd_Click" ToolTip="按计算机名 + 当天日期自动生成（取后 6 位），填入后点“设置”生效"/>
+            <TextBox x:Name="TxtPwd" FontFamily="Consolas" FontSize="12.5" Height="26" VerticalContentAlignment="Center"
+                     Padding="6,0" BorderBrush="#D8E0DC" ToolTip="留空并点设置=清除解锁密码"/>
+        </DockPanel>
+
+        <TextBlock x:Name="TxtPwdState" Grid.Row="3" FontSize="11" Foreground="#7C8A85" Margin="0,6,0,0" TextWrapping="Wrap"/>
+
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
+            <Button x:Name="BtnRelock" Content="重新拦截（立即恢复管控）" Height="32" Padding="16,0"
+                    Background="#B91C1C" Foreground="White" FontWeight="Bold" BorderThickness="0"
+                    Click="Relock_Click" Margin="0,0,10,0"/>
+            <Button Content="关闭" Width="90" Height="32" Background="#E4E9E7" Foreground="#1A2622"
+                    FontWeight="Bold" BorderThickness="0" Click="Close_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>
