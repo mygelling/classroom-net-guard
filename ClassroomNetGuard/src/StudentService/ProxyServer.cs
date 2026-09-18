@@ -59,8 +59,19 @@ namespace StudentService
         // 活跃客户端连接跟踪：管控恢复（教师端切回课堂管控/解锁被撤销）时主动断开，
         // 学生端当前已打开的网页立即失效，刷新后重新走拦截判定。
         readonly ConcurrentDictionary<TcpClient, byte> _liveConns = new ConcurrentDictionary<TcpClient, byte>();
+        // 放行日志去抖：同一域名 30 秒内只上报一次，避免子资源请求刷屏教师端日志
+        readonly ConcurrentDictionary<string, DateTime> _accessLogTimes = new ConcurrentDictionary<string, DateTime>();
         System.Threading.Timer _unlockWatch;
         bool _lastRelaxed;
+
+        bool ShouldLogAccess(string host)
+        {
+            var now = DateTime.UtcNow;
+            var last = _accessLogTimes.GetOrAdd(host, DateTime.MinValue); // 首次记录必然通过
+            if ((now - last).TotalSeconds < 30) return false;
+            _accessLogTimes[host] = now;
+            return true;
+        }
 
         public ProxyServer(NetPolicy policy, TeacherConnection conn, CertManager certMgr, UnlockState unlock)
         {
@@ -149,6 +160,10 @@ namespace StudentService
                 // 解锁期间（学生输对密码后 30 分钟）临时放行全部网站
                 if (_policy.IsDomainAllowed(host, hp.port) || _unlock.IsActive)
                 {
+                    // 放行也上报日志（30 秒/域名去抖），教师端可查看学生访问记录
+                    if (ShouldLogAccess(host))
+                        _ = _conn.SendLogAsync(Environment.MachineName, "访问 " + host, "放行");
+
                     using var upstream = new TcpClient { NoDelay = true };
                     await upstream.ConnectAsync(host, hp.port);
                     var up = upstream.GetStream();
