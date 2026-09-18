@@ -221,13 +221,12 @@ namespace TeacherConsole
                 _policy.ClassroomOn ? (byte)0x0E : (byte)0xE0,
                 _policy.ClassroomOn ? (byte)0x7C : (byte)0x91,
                 _policy.ClassroomOn ? (byte)0x66 : (byte)0x2F));
+            // 右上角全局切换 = 全体学生机生效：清除所有设备的单独模式，全部跟随全局
+            if (_policy.DeviceModes != null) _policy.DeviceModes.Clear();
             PushPolicy(_policy.ClassroomOn ? "切换为课堂管控（白名单生效）" : "切换为自由模式（全部放行）");
-            // 全局模式切换后同步各设备卡片状态：未单独设置模式的设备跟随全局，已单独设置的保持单独模式
+            // 所有设备卡片同步为全局状态
             foreach (var d in _devices)
-            {
-                if (_policy.DeviceModes == null || !_policy.DeviceModes.ContainsKey(d.Seat))
-                    d.ClassroomOn = _policy.ClassroomOn;
-            }
+                d.ClassroomOn = _policy.ClassroomOn;
         }
 
         void SyncPolicyToUi()
