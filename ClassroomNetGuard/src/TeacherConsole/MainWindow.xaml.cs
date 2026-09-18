@@ -79,7 +79,15 @@ namespace TeacherConsole
             Dispatcher.Invoke(() =>
             {
                 var dev = session.Device;
-                if (_devices.All(d => d.Key != dev.Key)) _devices.Add(dev);
+                if (_devices.All(d => d.Key != dev.Key))
+                {
+                    // 设备图标按计算机名升序插入（忽略大小写），图标墙始终保持有序
+                    var idx = 0;
+                    while (idx < _devices.Count &&
+                           string.Compare(_devices[idx].Seat, dev.Seat, StringComparison.OrdinalIgnoreCase) <= 0)
+                        idx++;
+                    _devices.Insert(idx, dev);
+                }
                 dev.Online = true;
                 dev.LastSeen = DateTime.Now;
                 // 自动设置默认解锁密码：设备上线且从未设置过密码时，按“计算机名×当天日期取后6位”自动生成
