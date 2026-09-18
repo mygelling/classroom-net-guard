@@ -56,13 +56,25 @@ namespace StudentService
         TcpListener _listener;
         int _blockedCount;
         volatile string _lastUrl = "";
-        // 活跃客户端连接跟踪：管控恢复（教师端切回课堂管控/解锁被撤销）时主动断开，
-        // 学生端当前已打开的网页立即失效，刷新后重新走拦截判定。
-        readonly ConcurrentDictionary<TcpClient, byte> _liveConns = new ConcurrentDictionary<TcpClient, byte>();
+        // 活跃客户端连接跟踪：记录每个连接的 host/类型/响应是否已开始，
+        // 管控恢复（教师端切回课堂管控/解锁被撤销）时：未开始响应的 HTTP 连接注入拦截页（自动显示"访问已被拦截"），
+        // 其余连接断开，刷新后重新走拦截判定。
+        readonly ConcurrentDictionary<TcpClient, LiveConn> _liveConns = new ConcurrentDictionary<TcpClient, LiveConn>();
         // 放行日志去抖：同一域名 30 秒内只上报一次，避免子资源请求刷屏教师端日志
         readonly ConcurrentDictionary<string, DateTime> _accessLogTimes = new ConcurrentDictionary<string, DateTime>();
         System.Threading.Timer _unlockWatch;
         bool _lastRelaxed;
+
+        /// <summary>活跃代理连接的状态：用于管控恢复时对未完成响应的 HTTP 连接注入拦截页。</summary>
+        sealed class LiveConn
+        {
+            public NetworkStream Stream;
+            public string Host = "";
+            public int Port;
+            public bool IsConnect;
+            public volatile bool ResponseStarted; // 已开始向浏览器写响应（之后只能断开，不能注入）
+            public readonly SemaphoreSlim Gate = new SemaphoreSlim(1, 1); // 串行化对该连接的写入
+        }
 
         bool ShouldLogAccess(string host)
         {
@@ -107,20 +119,59 @@ namespace StudentService
             try
             {
                 // 宽松状态 = 自由模式（全部放行）或 网页解锁中（临时放行）。
-                // 任一解除（教师端切回课堂管控 / 解锁被撤销）→ 断开所有已建立连接，
-                // 学生端当前打开的网页立即失效，刷新后重新走拦截判定。
+                // 任一解除（教师端切回课堂管控 / 解锁被撤销）→
+                //   未开始响应的 HTTP 连接注入 403 拦截页（当前网页自动显示"访问已被拦截"）；
+                //   已开始响应或 HTTPS 隧道连接直接断开（浏览器刷新后重新判定）。
                 var relaxed = !_policy.ClassroomOn || _unlock.IsActive;
                 if (_lastRelaxed && !relaxed)
                 {
-                    foreach (var c in _liveConns.Keys)
+                    foreach (var kv in _liveConns)
                     {
-                        try { c.Close(); } catch { }
+                        var st = kv.Value;
+                        if (!st.IsConnect && !st.ResponseStarted && !string.IsNullOrEmpty(st.Host))
+                        {
+                            // 白名单站点：不注入，等正常响应返回；非白名单站点：注入拦截页（自动显示"访问已被拦截"）
+                            if (_policy.IsDomainAllowed(st.Host, st.Port))
+                                continue;
+                            _ = InjectBlockedAsync(st);
+                        }
+                        else
+                        {
+                            try { kv.Key.Close(); } catch { }
+                        }
                     }
-                    LogWriter.Info("管控恢复，断开全部活跃连接");
+                    LogWriter.Info("管控恢复：未在白名单的当前页面注入拦截页，其余连接断开");
                 }
                 _lastRelaxed = relaxed;
             }
             catch { }
+        }
+
+        /// <summary>向尚未开始响应的 HTTP 放行连接注入 403 拦截页（原请求响应被替换），随后断开连接。</summary>
+        async Task InjectBlockedAsync(LiveConn st)
+        {
+            try
+            {
+                var unlockArea = string.IsNullOrWhiteSpace(_policy.UnlockPassword) ? NoUnlockHtml : UnlockFormHtml;
+                var body = Encoding.UTF8.GetBytes(string.Format(BlockedHtml,
+                    System.Net.WebUtility.HtmlEncode(st.Host), unlockArea));
+                var header = "HTTP/1.1 403 Forbidden\r\n" +
+                             "Content-Type: text/html; charset=utf-8\r\n" +
+                             "Content-Length: " + body.Length + "\r\n" +
+                             "Connection: close\r\n" +
+                             "Cache-Control: no-store\r\n\r\n";
+                var hb = Encoding.ASCII.GetBytes(header);
+                await st.Gate.WaitAsync();
+                try
+                {
+                    await st.Stream.WriteAsync(hb, 0, hb.Length);
+                    await st.Stream.WriteAsync(body, 0, body.Length);
+                    await st.Stream.FlushAsync();
+                }
+                finally { st.Gate.Release(); }
+            }
+            catch { }
+            try { st.Stream.Close(); } catch { }
         }
 
         async Task AcceptLoopAsync()
@@ -136,11 +187,12 @@ namespace StudentService
 
         async Task HandleClientAsync(TcpClient client)
         {
-            _liveConns.TryAdd(client, 0);
+            var st = new LiveConn { Stream = client.GetStream() };
+            _liveConns.TryAdd(client, st);
             try
             {
                 client.NoDelay = true;
-                var stream = client.GetStream();
+                var stream = st.Stream;
 
                 var (head, rest) = await ReadHeadAsync(stream);
                 if (head == null) return;
@@ -154,6 +206,9 @@ namespace StudentService
                 }
 
                 var host = hp.host;
+                st.Host = host;
+                st.Port = hp.port;
+                st.IsConnect = isConnect;
                 _lastUrl = host;
                 _conn.SetCurrentUrl(host);
 
@@ -187,7 +242,7 @@ namespace StudentService
                         await up.WriteAsync(headBytes, 0, headBytes.Length);
                         if (rest != null && rest.Length > 0)
                             await up.WriteAsync(rest, 0, rest.Length);
-                        await PumpHttpWithDownloadCheckAsync(stream, up, host, head);
+                        await PumpHttpWithDownloadCheckAsync(st, up, host, head);
                     }
                 }
                 else
@@ -333,9 +388,11 @@ namespace StudentService
         /// 读响应头判定是否下载及是否符合下载策略，拦截则返回提示页，放行则继续转发。
         /// 代理为"单连接单请求"模型：转发完完整响应体（Content-Length / chunked / EOF 界定）即结束，
         /// 并把响应头改写为 Connection: close，避免浏览器 keep-alive 复用同一连接导致后续请求无人处理而转圈。
+        /// 对客户端的写入经 LiveConn.Gate 串行化，管控恢复时可由 UnlockWatchTick 注入拦截页。
         /// </summary>
-        async Task PumpHttpWithDownloadCheckAsync(Stream dst, Stream src, string host, string requestHead)
+        async Task PumpHttpWithDownloadCheckAsync(LiveConn st, Stream src, string host, string requestHead)
         {
+            var dst = st.Stream;
             var (head, rest) = await ReadHeadAsync(src);
             if (head == null) return;
 
@@ -354,9 +411,15 @@ namespace StudentService
             head = Regex.Replace(head, "(?im)^Keep-Alive:.*$", "");
 
             var hb = Encoding.ASCII.GetBytes(head + "\r\n\r\n");
-            await dst.WriteAsync(hb, 0, hb.Length);
-            if (rest != null && rest.Length > 0)
-                await dst.WriteAsync(rest, 0, rest.Length);
+            await st.Gate.WaitAsync();
+            try
+            {
+                st.ResponseStarted = true; // 开始写响应：之后管控恢复只能断开，不能注入拦截页
+                await dst.WriteAsync(hb, 0, hb.Length);
+                if (rest != null && rest.Length > 0)
+                    await dst.WriteAsync(rest, 0, rest.Length);
+            }
+            finally { st.Gate.Release(); }
 
             // HEAD 请求无响应体
             if (requestHead.StartsWith("HEAD ", StringComparison.OrdinalIgnoreCase))
@@ -372,35 +435,49 @@ namespace StudentService
             {
                 // 已转发 rest（body 开头），补齐剩余 Content-Length 字节
                 var remaining = cl - (rest?.Length ?? 0);
-                if (remaining > 0) await CopyExactlyAsync(dst, src, remaining);
+                if (remaining > 0) await CopyExactlyToClientAsync(src, st, remaining);
                 return;
             }
 
             if (lower.Contains("transfer-encoding: chunked"))
             {
-                await PumpChunkedAsync(dst, src, rest ?? Array.Empty<byte>());
+                await PumpChunkedToClientAsync(src, st, rest ?? Array.Empty<byte>());
                 return;
             }
 
             // 无长度头：EOF 界定（上游会关闭连接）
-            var t = PumpAsync(src, dst);
+            var t = PumpToClientAsync(src, st);
             await t;
         }
 
-        static async Task CopyExactlyAsync(Stream dst, Stream src, long count)
+        /// <summary>经连接 Gate 向浏览器写入并刷新（与管控恢复注入互斥）。</summary>
+        static async Task WriteToClientAsync(LiveConn st, byte[] data) => await WriteToClientAsync(st, data, 0, data.Length);
+
+        static async Task WriteToClientAsync(LiveConn st, byte[] data, int offset, int count)
+        {
+            await st.Gate.WaitAsync();
+            try
+            {
+                await st.Stream.WriteAsync(data, offset, count);
+                await st.Stream.FlushAsync();
+            }
+            finally { st.Gate.Release(); }
+        }
+
+        async Task CopyExactlyToClientAsync(Stream src, LiveConn st, long count)
         {
             var buf = new byte[16384];
             while (count > 0)
             {
                 var n = await src.ReadAsync(buf, 0, (int)Math.Min(buf.Length, count));
                 if (n <= 0) return;
-                await dst.WriteAsync(buf, 0, n);
+                await WriteToClientAsync(st, buf, 0, n);
                 count -= n;
             }
         }
 
         /// <summary>chunked 响应体转发：解析并原样转发各 chunk，读到 0 终止块（含 trailer）后结束。</summary>
-        async Task PumpChunkedAsync(Stream dst, Stream src, byte[] rest)
+        async Task PumpChunkedToClientAsync(Stream src, LiveConn st, byte[] rest)
         {
             int pos = 0;          // rest 消费位置
             var buf = new byte[16384];
@@ -437,7 +514,7 @@ namespace StudentService
                 if (semi >= 0) hex = hex.Substring(0, semi).Trim();
                 if (!int.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out var size))
                     return;
-                await WriteAsciiAsync(dst, line + "\r\n");
+                await WriteToClientAsync(st, Encoding.ASCII.GetBytes(line + "\r\n"));
                 if (size == 0)
                 {
                     // trailer 直到空行
@@ -445,14 +522,35 @@ namespace StudentService
                     {
                         var tl = await ReadLineAsync();
                         if (tl == null) return;
-                        await WriteAsciiAsync(dst, tl + "\r\n");
+                        await WriteToClientAsync(st, Encoding.ASCII.GetBytes(tl + "\r\n"));
                         if (tl.Length == 0) return;
                     }
                 }
-                await CopyExactlyAsync(dst, src, size);
+                await CopyExactlyToClientAsync(src, st, size);
                 await ReadLineAsync(); // 消费 chunk 后 CRLF
-                await WriteAsciiAsync(dst, "\r\n");
+                await WriteToClientAsync(st, Encoding.ASCII.GetBytes("\r\n"));
             }
+        }
+
+        /// <summary>EOF 界定响应：上游数据持续转发到浏览器（经 Gate 串行化）。</summary>
+        async Task PumpToClientAsync(Stream src, LiveConn st)
+        {
+            var buf = new byte[16384];
+            try
+            {
+                int n;
+                while ((n = await src.ReadAsync(buf, 0, buf.Length)) > 0)
+                {
+                    await st.Gate.WaitAsync();
+                    try
+                    {
+                        await st.Stream.WriteAsync(buf, 0, n);
+                        await st.Stream.FlushAsync();
+                    }
+                    finally { st.Gate.Release(); }
+                }
+            }
+            catch { }
         }
 
         /// <summary>按响应头判断是否为下载，并对照下载策略决定是否拦截。</summary>
