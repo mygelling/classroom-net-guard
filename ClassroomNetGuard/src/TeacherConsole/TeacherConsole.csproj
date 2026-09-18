@@ -7,8 +7,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>TeacherConsole</RootNamespace>
     <AssemblyName>TeacherConsole</AssemblyName>
+    <ApplicationIcon>app.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
+    <Resource Include="app.ico" />
     <ProjectReference Include="..\ClassroomNetGuard.Shared\ClassroomNetGuard.Shared.csproj" />
   </ItemGroup>
 </Project>
