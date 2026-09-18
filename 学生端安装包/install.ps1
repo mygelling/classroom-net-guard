@@ -97,6 +97,33 @@ if (Test-Path $caPfx) {
     }
 }
 
+# 7c) 创建受控 Edge 快捷方式（带远程调试端口 + 独立配置目录）：
+#     教师端切回课堂管控时，学生端通过调试端口自动刷新已打开的页面，重新走拦截判定。
+#     学生机请通过桌面"Edge 学生浏览器"打开网页；若用普通方式打开 Edge（无调试端口），
+#     自动刷新不可用，管控切换时页面需手动刷新后才会被拦截。
+$edgePaths = @(
+    "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    "C:\Program Files\Microsoft\Edge\Application\msedge.exe"
+)
+$edgeExe = $edgePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($edgeExe) {
+    try {
+        $desktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
+        $lnkPath = Join-Path $desktop "Edge 学生浏览器.lnk"
+        $ws = New-Object -ComObject WScript.Shell
+        $sc = $ws.CreateShortcut($lnkPath)
+        $sc.TargetPath = $edgeExe
+        $sc.Arguments = "--remote-debugging-port=9222 --user-data-dir=C:\ProgramData\NetGuard\edge-profile --no-first-run --no-default-browser-check"
+        $sc.Description = "学生受控浏览器：教师端切换管控时自动刷新页面"
+        $sc.Save()
+        Write-Host "已创建受控 Edge 快捷方式（桌面：Edge 学生浏览器）"
+    } catch {
+        Write-Host "[警告] 创建受控 Edge 快捷方式失败：$($_.Exception.Message)"
+    }
+} else {
+    Write-Host "[警告] 未找到 Edge，受控快捷方式未创建（自动刷新页面功能不可用）"
+}
+
 # 8) 所有登录用户自启：公共启动文件夹（每次登录启动托盘并设置系统代理）
 $vbsLine = 'CreateObject("WScript.Shell").Run """' + $tray + '""", 0, False'
 Set-Content -Path $startupVbs -Value $vbsLine -Encoding ASCII
