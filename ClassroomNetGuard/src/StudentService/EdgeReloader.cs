@@ -25,23 +25,38 @@ namespace StudentService
 
         static async Task ReloadAllAsync()
         {
-            try
+            // 重试多次：覆盖 Edge 刚启动 / 调试端口尚未就绪的时序
+            List<CdpTarget> targets = null;
+            Exception lastErr = null;
+            for (int i = 0; i < 4; i++)
             {
-                using var hc = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
-                var json = await hc.GetStringAsync(ListUrl);
-                var targets = JsonSerializer.Deserialize<List<CdpTarget>>(json);
-                if (targets == null) return;
-                foreach (var t in targets.Where(t => t != null && t.Type == "page" && !string.IsNullOrEmpty(t.WebSocketDebuggerUrl)))
+                try
                 {
-                    _ = ReloadOneAsync(t.WebSocketDebuggerUrl);
+                    using var hc = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+                    var json = await hc.GetStringAsync(ListUrl);
+                    targets = JsonSerializer.Deserialize<List<CdpTarget>>(json);
+                    break;
                 }
-                if (targets.Any(t => t != null && t.Type == "page"))
-                    LogWriter.Info("管控恢复：已向受控 Edge 发送页面自动刷新指令");
+                catch (Exception ex)
+                {
+                    lastErr = ex;
+                    await Task.Delay(400);
+                }
             }
-            catch
+
+            if (targets == null || targets.Count == 0)
             {
-                // Edge 未以调试模式启动（未使用受控快捷方式）→ 自动刷新不可用，静默跳过
+                // Edge 未以调试模式启动（未使用"Edge 学生浏览器"快捷方式）→ 自动刷新不可用
+                LogWriter.Warn("管控恢复：Edge 调试端口不可用，已加载页面无法自动刷新（请确认学生机使用桌面'Edge 学生浏览器'打开网页）");
+                return;
             }
+
+            var pages = targets.Where(t => t != null && t.Type == "page" && !string.IsNullOrEmpty(t.WebSocketDebuggerUrl)).ToList();
+            foreach (var t in pages)
+            {
+                _ = ReloadOneAsync(t.WebSocketDebuggerUrl);
+            }
+            LogWriter.Info("管控恢复：已向受控 Edge 发送页面自动刷新指令（页面数 " + pages.Count + "）");
         }
 
         static async Task ReloadOneAsync(string wsUrl)
