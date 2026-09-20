@@ -22,8 +22,13 @@ namespace TeacherConsole
                 OnChanged(nameof(Online));
                 OnChanged(nameof(StatusText));
                 OnChanged(nameof(StatusBrush));
+                OnChanged(nameof(StatusTextBrush));
                 OnChanged(nameof(CardBrush));
                 OnChanged(nameof(CardBrushBg));
+                OnChanged(nameof(CardBorderBrush));
+                OnChanged(nameof(IconOpacity));
+                OnChanged(nameof(NameBrush));
+                OnChanged(nameof(SubBrush));
             }
         }
 
@@ -89,13 +94,22 @@ namespace TeacherConsole
         public Visibility RelockVisibility => Unlocked ? Visibility.Visible : Visibility.Collapsed;
 
         public string StatusText => Online ? "在线" : "离线";
-        public string StatusBrush => Online ? "#16A34A" : "#B9C4C0";
+        public string StatusBrush => Online ? "#16A34A" : "#A9B4B0";
+        public string StatusTextBrush => Online ? "#0E7C66" : "#8A9490";
         public string LastSeenText => LastSeen == DateTime.MinValue ? "-" : LastSeen.ToString("HH:mm:ss");
 
-        /// <summary>图标主色：在线绿 / 离线灰 / 放行中橙。</summary>
-        public string CardBrush => !Online ? "#9AA7A2" : Unlocked ? "#E0912F" : "#0E7C66";
-        /// <summary>图标底色。</summary>
-        public string CardBrushBg => !Online ? "#EEF1F0" : Unlocked ? "#FDF3E6" : "#E4F1EC";
+        /// <summary>图标主色：在线亮绿 / 离线暗灰 / 放行中橙（离线明显变暗）。</summary>
+        public string CardBrush => !Online ? "#6E7B76" : Unlocked ? "#E0912F" : "#0F9D6E";
+        /// <summary>图标底色：在线浅绿 / 离线暗灰 / 放行中浅橙。</summary>
+        public string CardBrushBg => !Online ? "#E2E7E5" : Unlocked ? "#FDF3E6" : "#D7F0E4";
+        /// <summary>卡片边框：在线绿描边高亮 / 离线灰淡。</summary>
+        public string CardBorderBrush => !Online ? "#D9E0DD" : Unlocked ? "#F2D9B8" : "#8FD0B4";
+        /// <summary>图标不透明度：在线亮（1.0）/ 离线暗（0.45）。</summary>
+        public double IconOpacity => Online ? 1.0 : 0.45;
+        /// <summary>计算机名颜色：在线深色 / 离线淡灰。</summary>
+        public string NameBrush => Online ? "#14211D" : "#8A9490";
+        /// <summary>IP 等次要文字：在线正常灰 / 离线更淡。</summary>
+        public string SubBrush => Online ? "#7C8A85" : "#A8B1AD";
 
         public event PropertyChangedEventHandler PropertyChanged;
         void OnChanged(string name) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));

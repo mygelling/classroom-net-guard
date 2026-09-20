@@ -6,10 +6,10 @@
         Background="#EDF1EF" Loaded="Window_Loaded" Closing="Window_Closing">
 
     <Window.Resources>
-        <!-- 设备图标卡片模板：图标 + 计算机名，只显示设备信息 -->
+        <!-- 设备图标卡片模板：图标 + 计算机名，只显示设备信息；在线亮 / 离线暗 -->
         <DataTemplate x:Key="DevTemplate">
             <Border Width="176" Height="176" Margin="0,0,10,10" Background="#FBFCFB"
-                    BorderBrush="#E0E6E3" BorderThickness="1" CornerRadius="12"
+                    BorderBrush="{Binding CardBorderBrush}" BorderThickness="1.6" CornerRadius="12"
                     MouseLeftButtonUp="DevCard_Click" Cursor="Hand">
                 <Grid>
                     <Grid.RowDefinitions>
@@ -20,21 +20,23 @@
 
                     <!-- 状态行 -->
                     <DockPanel Grid.Row="0" Margin="10,6,10,0">
-                        <Ellipse Width="8" Height="8" Fill="{Binding StatusBrush}" DockPanel.Dock="Left" VerticalAlignment="Center"/>
-                        <TextBlock DockPanel.Dock="Right" Text="{Binding StatusText}" FontSize="10.5" Foreground="#7C8A85" VerticalAlignment="Center"/>
+                        <Ellipse Width="9" Height="9" Fill="{Binding StatusBrush}" DockPanel.Dock="Left" VerticalAlignment="Center"/>
+                        <TextBlock DockPanel.Dock="Right" Text="{Binding StatusText}" FontSize="11" FontWeight="Bold"
+                                   Foreground="{Binding StatusTextBrush}" VerticalAlignment="Center"/>
                         <TextBlock Text="{Binding UnlockStatusText}" FontSize="10.5" FontWeight="Bold"
                                    Foreground="{Binding UnlockStatusBrush}" VerticalAlignment="Center" Margin="6,0,0,0"/>
                     </DockPanel>
 
-                    <!-- 图标 + 计算机名 -->
+                    <!-- 图标 + 计算机名（离线整体变暗） -->
                     <StackPanel Grid.Row="1" HorizontalAlignment="Center" VerticalAlignment="Center">
-                        <Border Width="54" Height="54" CornerRadius="14" Background="{Binding CardBrushBg}">
-                            <TextBlock Text="&#xE7F8;" FontFamily="Segoe MDL2 Assets" FontSize="30"
+                        <Border Width="60" Height="60" CornerRadius="15" Background="{Binding CardBrushBg}"
+                                Opacity="{Binding IconOpacity}">
+                            <TextBlock Text="&#xE7F8;" FontFamily="Segoe MDL2 Assets" FontSize="34"
                                        Foreground="{Binding CardBrush}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
-                        <TextBlock Text="{Binding Seat}" FontSize="13" FontWeight="Bold" Foreground="#1A2622"
+                        <TextBlock Text="{Binding Seat}" FontSize="13" FontWeight="Bold" Foreground="{Binding NameBrush}"
                                    HorizontalAlignment="Center" Margin="0,9,0,0" TextTrimming="CharacterEllipsis" MaxWidth="150"/>
-                        <TextBlock Text="{Binding Ip}" FontSize="10.5" Foreground="#7C8A85" HorizontalAlignment="Center" Margin="0,3,0,0"/>
+                        <TextBlock Text="{Binding Ip}" FontSize="10.5" Foreground="{Binding SubBrush}" HorizontalAlignment="Center" Margin="0,3,0,0"/>
                     </StackPanel>
 
                     <!-- 操作行 -->
