@@ -135,13 +135,9 @@ namespace StudentService
                         if (p != null)
                         {
                             ApplyPolicy(p);
+                            // 收到新策略后本地直接应用，不再向教师端回 ack——
+                            // 避免大量学生机同时收到策略后集中回执造成教师机网络堵塞
                             LogWriter.Info("收到新策略 v" + Policy.Version + (Policy.ClassroomOn ? "（课堂管控）" : "（自由模式）"));
-                            try
-                            {
-                                await FrameProtocol.WriteAsync(stream,
-                                    WireMessage.Create(WireMessage.TAck, new AckData { Version = Policy.Version }).Serialize());
-                            }
-                            catch { }
                         }
                         break;
 
