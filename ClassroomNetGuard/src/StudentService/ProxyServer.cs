@@ -224,11 +224,12 @@ namespace StudentService
                         // 注意：ReadHeadAsync 剥离了头部终止符，转发时必须补回 \r\n\r\n，否则上游等不到完整请求
                         // 注意：浏览器发给代理的是“绝对形式”请求行（GET http://host/...），
                         // 上游服务器通常只接受“原始形式”（GET /path...），必须改写后再转发，否则返回 400/404。
+                        // 注意：rest 是请求头之后已读到的字节（请求体开头），必须完整转发给上游，
+                        // 且 POST/PUT 等带请求体的请求剩余 body 也要从客户端流读完后转发，否则上游等 body 超时断开。
                         var rewrittenHead = RewriteRequestLine(head);
                         var headBytes = Encoding.ASCII.GetBytes(rewrittenHead + "\r\n\r\n");
                         await up.WriteAsync(headBytes, 0, headBytes.Length);
-                        if (rest != null && rest.Length > 0)
-                            await up.WriteAsync(rest, 0, rest.Length);
+                        await ForwardRequestBodyAsync(stream, up, head, rest ?? Array.Empty<byte>());
                         await PumpHttpWithDownloadCheckAsync(st, up, host, head);
                     }
                 }
@@ -370,6 +371,121 @@ namespace StudentService
         // ===== 转发与响应 =====
 
         /// <summary>
+        /// 转发请求体剩余部分到上游（POST/PUT 等）。rest 是请求头之后已读到的字节（请求体开头），
+        /// 按 Content-Length / Transfer-Encoding: chunked / EOF 三种界定把完整请求体送到上游。
+        /// </summary>
+        async Task ForwardRequestBodyAsync(Stream client, Stream up, string requestHead, byte[] rest)
+        {
+            var lower = requestHead.ToLowerInvariant();
+            var cl = Regex.Match(lower, "content-length:\\s*(\\d+)");
+            if (cl.Success && long.TryParse(cl.Groups[1].Value, out var total))
+            {
+                if (rest.Length > 0)
+                    await up.WriteAsync(rest, 0, rest.Length);
+                var remain = total - rest.Length;
+                if (remain > 0)
+                {
+                    var buf = new byte[16384];
+                    while (remain > 0)
+                    {
+                        var n = await client.ReadAsync(buf, 0, (int)Math.Min(buf.Length, remain));
+                        if (n <= 0) return; // 客户端中断：上游将因 body 不完整而断开
+                        await up.WriteAsync(buf, 0, n);
+                        remain -= n;
+                    }
+                }
+            }
+            else if (lower.Contains("transfer-encoding: chunked"))
+            {
+                await PumpRequestChunkedAsync(client, up, rest);
+            }
+            else if (rest.Length > 0)
+            {
+                // 无长度头（EOF 界定请求体，罕见）
+                await up.WriteAsync(rest, 0, rest.Length);
+                var buf = new byte[16384];
+                int n;
+                while ((n = await client.ReadAsync(buf, 0, buf.Length)) > 0)
+                    await up.WriteAsync(buf, 0, n);
+            }
+        }
+
+        /// <summary>chunked 请求体转发：解析客户端各 chunk（含 trailer）原样转发到上游。
+        /// 数据源统一为 FillAsync（rest 优先、精确 count），行逐字节、数据按 size 精确取，无预读竞争。</summary>
+        async Task PumpRequestChunkedAsync(Stream src, Stream dst, byte[] rest)
+        {
+            int pos = 0;
+
+            async Task<int> FillAsync(byte[] buffer, int offset, int count)
+            {
+                if (pos < rest.Length)
+                {
+                    var take = Math.Min(rest.Length - pos, count);
+                    Array.Copy(rest, pos, buffer, offset, take);
+                    pos += take;
+                    return take;
+                }
+                return await src.ReadAsync(buffer, offset, count);
+            }
+
+            async Task<string> ReadLineAsync()
+            {
+                var sb = new System.Text.StringBuilder();
+                var one = new byte[1];
+                while (true)
+                {
+                    var n = await FillAsync(one, 0, 1);
+                    if (n <= 0) return null;
+                    var b = one[0];
+                    if (b == 10)
+                    {
+                        if (sb.Length > 0 && sb[sb.Length - 1] == '\r') sb.Length--;
+                        return sb.ToString();
+                    }
+                    sb.Append((char)b);
+                }
+            }
+
+            async Task CopyDataAsync(long size)
+            {
+                var buf = new byte[16384];
+                var remaining = size;
+                while (remaining > 0)
+                {
+                    var n = await FillAsync(buf, 0, (int)Math.Min(buf.Length, remaining));
+                    if (n <= 0) return;
+                    await dst.WriteAsync(buf, 0, n);
+                    remaining -= n;
+                }
+            }
+
+            while (true)
+            {
+                var line = await ReadLineAsync();
+                if (line == null) return;
+                var hex = line.Trim();
+                var semi = hex.IndexOf(';');
+                if (semi >= 0) hex = hex.Substring(0, semi).Trim();
+                if (!int.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out var size))
+                    return;
+                await dst.WriteAsync(Encoding.ASCII.GetBytes(line + "\r\n"));
+                if (size == 0)
+                {
+                    while (true)
+                    {
+                        var tl = await ReadLineAsync();
+                        if (tl == null) return;
+                        await dst.WriteAsync(Encoding.ASCII.GetBytes(tl + "\r\n"));
+                        if (tl.Length == 0) return;
+                    }
+                }
+                await CopyDataAsync(size);
+                if (await ReadLineAsync() == null) return; // 消费 chunk 后 CRLF
+                await dst.WriteAsync(Encoding.ASCII.GetBytes("\r\n"));
+            }
+        }
+
+        /// <summary>
         /// http 响应转发 + 下载管控（原浏览器扩展职责，现由代理承担）：
         /// 读响应头判定是否下载及是否符合下载策略，拦截则返回提示页，放行则继续转发。
         /// 代理为"单连接单请求"模型：转发完完整响应体（Content-Length / chunked / EOF 界定）即结束，
@@ -401,8 +517,6 @@ namespace StudentService
             {
                 st.ResponseStarted = true; // 开始写响应：之后管控恢复只能断开，不能注入拦截页
                 await dst.WriteAsync(hb, 0, hb.Length);
-                if (rest != null && rest.Length > 0)
-                    await dst.WriteAsync(rest, 0, rest.Length);
             }
             finally { st.Gate.Release(); }
 
@@ -418,7 +532,9 @@ namespace StudentService
 
             if (cl >= 0)
             {
-                // 已转发 rest（body 开头），补齐剩余 Content-Length 字节
+                // rest 是 body 开头（读响应头时已多读的字节），写出一次后补齐剩余 Content-Length 字节
+                if (rest != null && rest.Length > 0)
+                    await WriteToClientAsync(st, rest, 0, rest.Length);
                 var remaining = cl - (rest?.Length ?? 0);
                 if (remaining > 0) await CopyExactlyToClientAsync(src, st, remaining);
                 return;
@@ -426,13 +542,15 @@ namespace StudentService
 
             if (lower.Contains("transfer-encoding: chunked"))
             {
+                // rest 交给 chunked 解析器统一消费写出（绝不能在写头时重复写出）
                 await PumpChunkedToClientAsync(src, st, rest ?? Array.Empty<byte>());
                 return;
             }
 
-            // 无长度头：EOF 界定（上游会关闭连接）
-            var t = PumpToClientAsync(src, st);
-            await t;
+            // 无长度头：EOF 界定（上游会关闭连接）；rest 是 body 开头，先写出再持续转发
+            if (rest != null && rest.Length > 0)
+                await WriteToClientAsync(st, rest, 0, rest.Length);
+            await PumpToClientAsync(src, st);
         }
 
         /// <summary>经连接 Gate 向浏览器写入并刷新（与管控恢复注入互斥）。</summary>
@@ -461,26 +579,36 @@ namespace StudentService
             }
         }
 
-        /// <summary>chunked 响应体转发：解析并原样转发各 chunk，读到 0 终止块（含 trailer）后结束。</summary>
+        /// <summary>
+        /// chunked 响应体转发：解析并原样转发各 chunk，读到 0 终止块（含 trailer）后结束。
+        /// 数据源统一为 FillAsync（rest 优先、精确 count），行读取逐字节、数据拷贝按 size 精确取，
+        /// 不存在预读缓冲与数据拷贝的游标竞争，避免 chunk 错位导致浏览器 ERR_INCOMPLETE_CHUNKED_ENCODING。
+        /// </summary>
         async Task PumpChunkedToClientAsync(Stream src, LiveConn st, byte[] rest)
         {
-            int pos = 0;          // rest 消费位置
-            var buf = new byte[16384];
+            int pos = 0; // rest 消费位置
 
-            async Task<int> ReadByteAsync()
+            async Task<int> FillAsync(byte[] buffer, int offset, int count)
             {
-                if (pos < rest.Length) return rest[pos++];
-                var n = await src.ReadAsync(buf, 0, 1);
-                return n <= 0 ? -1 : buf[0];
+                if (pos < rest.Length)
+                {
+                    var take = Math.Min(rest.Length - pos, count);
+                    Array.Copy(rest, pos, buffer, offset, take);
+                    pos += take;
+                    return take;
+                }
+                return await src.ReadAsync(buffer, offset, count);
             }
 
             async Task<string> ReadLineAsync()
             {
                 var sb = new System.Text.StringBuilder();
+                var one = new byte[1];
                 while (true)
                 {
-                    var b = await ReadByteAsync();
-                    if (b < 0) return null;
+                    var n = await FillAsync(one, 0, 1);
+                    if (n <= 0) return null;
+                    var b = one[0];
                     if (b == 10)
                     {
                         if (sb.Length > 0 && sb[sb.Length - 1] == '\r') sb.Length--;
@@ -490,6 +618,22 @@ namespace StudentService
                 }
             }
 
+            // 精确取 size 字节：rest 优先，否则从上游读；一次不多读
+            async Task<bool> CopyChunkDataAsync(long size)
+            {
+                var buf = new byte[16384];
+                var remaining = size;
+                while (remaining > 0)
+                {
+                    var n = await FillAsync(buf, 0, (int)Math.Min(buf.Length, remaining));
+                    if (n <= 0) return false;
+                    await WriteToClientAsync(st, buf, 0, n);
+                    remaining -= n;
+                }
+                return true;
+            }
+
+            var totalWritten = 0L;
             while (true)
             {
                 var line = await ReadLineAsync();
@@ -499,7 +643,9 @@ namespace StudentService
                 if (semi >= 0) hex = hex.Substring(0, semi).Trim();
                 if (!int.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out var size))
                     return;
-                await WriteToClientAsync(st, Encoding.ASCII.GetBytes(line + "\r\n"));
+                var lb = Encoding.ASCII.GetBytes(line + "\r\n");
+                await WriteToClientAsync(st, lb);
+                totalWritten += lb.Length;
                 if (size == 0)
                 {
                     // trailer 直到空行
@@ -507,13 +653,18 @@ namespace StudentService
                     {
                         var tl = await ReadLineAsync();
                         if (tl == null) return;
-                        await WriteToClientAsync(st, Encoding.ASCII.GetBytes(tl + "\r\n"));
+                        var tb = Encoding.ASCII.GetBytes(tl + "\r\n");
+                        await WriteToClientAsync(st, tb);
+                        totalWritten += tb.Length;
                         if (tl.Length == 0) return;
                     }
                 }
-                await CopyExactlyToClientAsync(src, st, size);
-                await ReadLineAsync(); // 消费 chunk 后 CRLF
-                await WriteToClientAsync(st, Encoding.ASCII.GetBytes("\r\n"));
+                if (!await CopyChunkDataAsync(size)) return;
+                totalWritten += size;
+                if (await ReadLineAsync() == null) return; // 消费 chunk 后 CRLF
+                var cb = Encoding.ASCII.GetBytes("\r\n");
+                await WriteToClientAsync(st, cb);
+                totalWritten += cb.Length;
             }
         }
 
