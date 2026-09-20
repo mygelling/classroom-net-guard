@@ -124,6 +124,30 @@ if ($edgeExe) {
     Write-Host "[警告] 未找到 Edge，受控快捷方式未创建（自动刷新页面功能不可用）"
 }
 
+# 7d) 统一受控入口：把系统开始菜单 / 任务栏 / 公共桌面的 Edge 快捷方式也改为受控启动
+#     学生无论从哪个常规入口打开 Edge，都带调试端口（切回管控时页面可自动刷新拦截）
+$edgeLnkPaths = @(
+    "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Microsoft Edge.lnk",
+    (Join-Path $env:APPDATA "Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\Microsoft Edge.lnk"),
+    (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Pinned\Microsoft Edge.lnk"),
+    "C:\Users\Public\Desktop\Microsoft Edge.lnk"
+)
+$edgeArgs = "--remote-debugging-port=9222 --user-data-dir=C:\ProgramData\NetGuard\edge-profile --no-first-run --no-default-browser-check"
+$modified = 0
+foreach ($lnkPath in $edgeLnkPaths) {
+    if (-not (Test-Path $lnkPath)) { continue }
+    try {
+        $ws2 = New-Object -ComObject WScript.Shell
+        $sc2 = $ws2.CreateShortcut($lnkPath)
+        if ($sc2.Arguments -notmatch "remote-debugging-port") {
+            $sc2.Arguments = ($edgeArgs + " " + $sc2.Arguments).Trim()
+            $sc2.Save()
+            $modified++
+        }
+    } catch { }
+}
+if ($modified -gt 0) { Write-Host "已将 $modified 个系统 Edge 快捷方式改为受控启动（开始菜单/任务栏/桌面）" }
+
 # 8) 所有登录用户自启：公共启动文件夹（每次登录启动托盘并设置系统代理）
 $vbsLine = 'CreateObject("WScript.Shell").Run """' + $tray + '""", 0, False'
 Set-Content -Path $startupVbs -Value $vbsLine -Encoding ASCII
