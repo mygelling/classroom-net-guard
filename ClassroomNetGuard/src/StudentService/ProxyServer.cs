@@ -130,8 +130,8 @@ namespace StudentService
                         }
                     }
                     LogWriter.Info("管控恢复：未在白名单的当前页面注入拦截页，其余连接断开");
-                    // 自动刷新已完全加载的页面（经 Edge 调试端口 CDP），刷新后重新走拦截判定
-                    EdgeReloader.ReloadAll();
+                    // 学生端使用默认 Edge（无调试端口）：已完全加载的页面无法自动刷新，
+                    // 需由学生手动刷新后重新走拦截判定；新发起的访问与未响应连接由上面注入逻辑直接拦截。
                 }
                 _lastRelaxed = relaxed;
             }
