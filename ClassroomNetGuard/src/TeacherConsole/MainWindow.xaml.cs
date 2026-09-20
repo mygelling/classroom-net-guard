@@ -28,10 +28,12 @@ namespace TeacherConsole
         readonly ObservableCollection<LogRow> _logs = new ObservableCollection<LogRow>();
         readonly ObservableCollection<string> _allowDomains = new ObservableCollection<string>();
         readonly DispatcherTimer _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-        ICollectionView _logView;
         NetPolicy _policy;
-        string _logFilter = "全部";
         bool _suppress; // 防止代码初始化控件时触发策略变更事件
+        LogWindow _logWindow;
+
+        /// <summary>实时日志集合（日志窗口共享同一数据源）。</summary>
+        public ObservableCollection<LogRow> Logs => _logs;
 
         public MainWindow()
         {
@@ -43,9 +45,6 @@ namespace TeacherConsole
             _policy = PolicyStore.Load();
 
             DevList.ItemsSource = _devices;
-            _logView = CollectionViewSource.GetDefaultView(_logs);
-            _logView.Filter = row => FilterLog((LogRow)row);
-            LogList.ItemsSource = _logView;
 
             _suppress = true;
             SyncPolicyToUi();
@@ -150,30 +149,18 @@ namespace TeacherConsole
                 Result = result
             });
             while (_logs.Count > 500) _logs.RemoveAt(_logs.Count - 1);
-            _logView?.Refresh();
         }
 
-        bool FilterLog(LogRow row)
+        /// <summary>右上角"实时日志"：打开日志窗口（单实例，复用已开窗口）。</summary>
+        void Logs_Click(object sender, RoutedEventArgs e)
         {
-            switch (_logFilter)
+            if (_logWindow == null)
             {
-                case "拦截": return row.Result == "拦截";
-                case "放行": return row.Result == "放行";
-                case "策略": return row.Result == "策略";
-                default: return true;
+                _logWindow = new LogWindow(this) { Owner = this };
+                _logWindow.Closed += (_, __) => _logWindow = null;
             }
-        }
-
-        void Filter_Changed(object sender, RoutedEventArgs e)
-        {
-            _logFilter = FAll.IsChecked == true ? "全部" : (FBlock.IsChecked == true ? "拦截" : "放行");
-            _logView?.Refresh();
-        }
-
-        void ClearLogs_Click(object sender, RoutedEventArgs e)
-        {
-            _logs.Clear();
-            _logView?.Refresh();
+            _logWindow.Show();
+            _logWindow.Activate();
         }
 
         // ===== 策略操作 =====
