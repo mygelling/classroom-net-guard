@@ -70,6 +70,8 @@ namespace StudentService
             public string Host = "";
             public int Port;
             public bool IsConnect;
+            /// <summary>请求头中的来源值（Referer/Origin 原始值），用于白名单页面第三方子资源的关联放行。</summary>
+            public volatile string ReferrerHost;
             public volatile bool ResponseStarted; // 已开始向浏览器写响应（之后只能断开，不能注入）
             public readonly SemaphoreSlim Gate = new SemaphoreSlim(1, 1); // 串行化对该连接的写入
         }
@@ -119,8 +121,9 @@ namespace StudentService
                         var st = kv.Value;
                         if (!st.IsConnect && !st.ResponseStarted && !string.IsNullOrEmpty(st.Host))
                         {
-                            // 白名单站点：不注入，等正常响应返回；非白名单站点：注入拦截页（自动显示"访问已被拦截"）
-                            if (_policy.IsDomainAllowed(st.Host, st.Port))
+                            // 白名单站点 / 资源放行域名 / 白名单页面引用的第三方子资源：不注入，等正常响应返回；
+                            // 其余：注入拦截页（自动显示"访问已被拦截"）
+                            if (IsAllowedWithReferrer(st.Host, st.Port, st.ReferrerHost))
                                 continue;
                             _ = InjectBlockedAsync(st);
                         }
@@ -200,11 +203,12 @@ namespace StudentService
                 st.Host = host;
                 st.Port = hp.port;
                 st.IsConnect = isConnect;
+                st.ReferrerHost = ParseReferrerValue(head); // 白名单页面引用的第三方子资源据此放行
                 _lastUrl = host;
                 _conn.SetCurrentUrl(host);
 
-                // 解锁期间（学生输对密码后 30 分钟）临时放行全部网站
-                if (_policy.IsDomainAllowed(host, hp.port) || _unlock.IsActive)
+                // 放行条件：白名单站点 / 资源放行域名 / 白名单页面引用的第三方子资源（Referer 关联）/ 解锁期间临时放行
+                if (IsAllowedWithReferrer(host, hp.port, st.ReferrerHost) || _unlock.IsActive)
                 {
                     using var upstream = new TcpClient { NoDelay = true };
                     await upstream.ConnectAsync(host, hp.port);
@@ -258,6 +262,41 @@ namespace StudentService
         }
 
         // ===== 头部解析 =====
+
+        /// <summary>放行判定（含 Referer 关联）：白名单站点 / 资源放行域名 / 白名单页面引用的第三方子资源。</summary>
+        bool IsAllowedWithReferrer(string host, int port, string referrerHost)
+        {
+            if (_policy.IsDomainAllowed(host, port)) return true;
+            if (_policy.IsResourceDomainAllowed(host, port)) return true;
+            if (_policy.ReferrerAllowEnabled && !string.IsNullOrWhiteSpace(referrerHost))
+                return _policy.IsReferrerAllowed(referrerHost);
+            return false;
+        }
+
+        /// <summary>从请求头提取 Referer/Origin 的原始值（供第三方子资源关联放行）。无来源或无法解析返回 null。</summary>
+        static string ParseReferrerValue(string head)
+        {
+            try
+            {
+                var lines = head.Split('\n');
+                foreach (var raw in lines)
+                {
+                    var line = raw.TrimEnd('\r');
+                    if (line.Length == 0) continue;
+                    var colon = line.IndexOf(':');
+                    if (colon <= 0) continue;
+                    var name = line.Substring(0, colon).Trim();
+                    if (!name.Equals("Referer", StringComparison.OrdinalIgnoreCase) &&
+                        !name.Equals("Origin", StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    var value = line.Substring(colon + 1).Trim();
+                    if (value.Length == 0) continue;
+                    return value;
+                }
+            }
+            catch { }
+            return null;
+        }
 
         static async Task<(string head, byte[] rest)> ReadHeadAsync(Stream stream, int max = 64 * 1024)
         {

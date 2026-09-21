@@ -54,6 +54,8 @@ namespace StudentService
             Policy.Version = p.Version;
             Policy.ClassroomOn = p.ClassroomOn;
             Policy.AllowDomains = p.AllowDomains ?? new List<string>();
+            Policy.AllowResourceDomains = p.AllowResourceDomains ?? new List<string>();
+            Policy.ReferrerAllowEnabled = p.ReferrerAllowEnabled;
             Policy.Download = p.Download ?? new DownloadPolicy();
             Policy.UnlockPassword = p.UnlockPassword ?? "";
             Policy.UpdatedAt = p.UpdatedAt;

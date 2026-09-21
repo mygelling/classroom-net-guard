@@ -19,17 +19,21 @@ namespace TeacherConsole
 
         readonly NetPolicy _policy;
         readonly ObservableCollection<string> _allowDomains;
+        readonly ObservableCollection<string> _resourceDomains;
         readonly Action<string> _applyAndPush;
         bool _suppress;
 
-        public SettingsWindow(NetPolicy policy, ObservableCollection<string> allowDomains, Action<string> applyAndPush)
+        public SettingsWindow(NetPolicy policy, ObservableCollection<string> allowDomains,
+            ObservableCollection<string> resourceDomains, Action<string> applyAndPush)
         {
             InitializeComponent();
             _policy = policy;
             _allowDomains = allowDomains;
+            _resourceDomains = resourceDomains;
             _applyAndPush = applyAndPush;
 
             AllowList.ItemsSource = _allowDomains;
+            ResList.ItemsSource = _resourceDomains;
             _suppress = true;
             SyncPolicyToUi();
             _suppress = false;
@@ -73,6 +77,58 @@ namespace TeacherConsole
             _applyAndPush("移除白名单 " + d);
         }
 
+        // ===== 资源放行 =====
+
+        void Referrer_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_suppress || _policy == null) return;
+            _policy.ReferrerAllowEnabled = ChkReferrer.IsChecked == true;
+            UpdateResState();
+            _applyAndPush(_policy.ReferrerAllowEnabled
+                ? "开启：放行白名单页面引用的第三方资源"
+                : "关闭：严格按白名单放行（第三方资源拦截）");
+        }
+
+        void AddRes_Click(object sender, RoutedEventArgs e)
+        {
+            var v = ResInput.Text.Trim();
+            if (string.IsNullOrEmpty(v)) { TxtResHint.Text = "请输入域名或 IP"; return; }
+            if (!IsValidRule(v))
+            {
+                TxtResHint.Text = "格式不正确：支持域名(baidu.com / *.edu.cn)、IP(10.114.105.5)、IP:端口(10.114.105.5:8000)、IP段(10.114.105.*)、网段(10.114.105.0/24)，不要带协议和路径";
+                return;
+            }
+            var lower = v.ToLowerInvariant();
+            if (_resourceDomains.Contains(lower)) { TxtResHint.Text = "该规则已在资源放行列表中"; return; }
+            TxtResHint.Text = "";
+            _resourceDomains.Add(lower);
+            ResInput.Text = "";
+            _policy.AllowResourceDomains = _resourceDomains.ToList();
+            UpdateResState();
+            _applyAndPush("添加资源放行 " + lower);
+        }
+
+        void ResList_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+        {
+            RemoveResBtn.IsEnabled = ResList.SelectedItem != null;
+        }
+
+        void RemoveRes_Click(object sender, RoutedEventArgs e)
+        {
+            var d = ResList.SelectedItem as string;
+            if (d == null) return;
+            _resourceDomains.Remove(d);
+            _policy.AllowResourceDomains = _resourceDomains.ToList();
+            UpdateResState();
+            _applyAndPush("移除资源放行 " + d);
+        }
+
+        void UpdateResState()
+        {
+            TxtResState.Text = (_policy.ReferrerAllowEnabled ? "来源关联放行 · 开启" : "来源关联放行 · 关闭")
+                + (_policy.AllowResourceDomains?.Count > 0 ? " · 固定资源 " + _policy.AllowResourceDomains.Count + " 条" : "");
+        }
+
         void DlPolicy_Changed(object sender, RoutedEventArgs e)
         {
             if (_suppress || _policy == null) return;
@@ -114,6 +170,7 @@ namespace TeacherConsole
 
         void SyncPolicyToUi()
         {
+            ChkReferrer.IsChecked = _policy.ReferrerAllowEnabled;
             DlEnable.IsChecked = _policy.Download.Enabled;
             DlDetail.IsEnabled = _policy.Download.Enabled;
             DlDetail.Opacity = _policy.Download.Enabled ? 1.0 : 0.6;
@@ -125,6 +182,7 @@ namespace TeacherConsole
             var idx = _policy.Download.MaxSizeMB switch { 10 => 0, 50 => 1, 200 => 2, _ => 3 };
             if (SizeSel.Items.Count > idx) SizeSel.SelectedIndex = idx;
             UpdateDlState();
+            UpdateResState();
         }
 
         void Close_Click(object sender, RoutedEventArgs e) => Close();

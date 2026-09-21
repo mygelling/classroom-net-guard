@@ -27,6 +27,7 @@ namespace TeacherConsole
         readonly ObservableCollection<DeviceViewModel> _devices = new ObservableCollection<DeviceViewModel>();
         readonly ObservableCollection<LogRow> _logs = new ObservableCollection<LogRow>();
         readonly ObservableCollection<string> _allowDomains = new ObservableCollection<string>();
+        readonly ObservableCollection<string> _resourceDomains = new ObservableCollection<string>();
         readonly DispatcherTimer _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         NetPolicy _policy;
         bool _suppress; // 防止代码初始化控件时触发策略变更事件
@@ -49,6 +50,8 @@ namespace TeacherConsole
             _suppress = true;
             SyncPolicyToUi();
             _policy.AllowDomains.ForEach(d => _allowDomains.Add(d));
+            (_policy.AllowResourceDomains ?? new System.Collections.Generic.List<string>())
+                .ForEach(d => _resourceDomains.Add(d));
             _suppress = false;
 
             _server.DeviceOnline += Server_DeviceOnline;
@@ -237,7 +240,7 @@ namespace TeacherConsole
         /// <summary>打开设置窗口：网站白名单（支持域名/IP）与下载策略。</summary>
         void Settings_Click(object sender, RoutedEventArgs e)
         {
-            var win = new SettingsWindow(_policy, _allowDomains, reason => PushPolicy(reason));
+            var win = new SettingsWindow(_policy, _allowDomains, _resourceDomains, reason => PushPolicy(reason));
             win.Owner = this;
             win.ShowDialog();
         }

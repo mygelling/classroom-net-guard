@@ -27,6 +27,10 @@ namespace ClassroomNetGuard.Shared
         public bool ClassroomOn { get; set; } = true;
         /// <summary>白名单域名，支持 *.example.com 通配符。</summary>
         public List<string> AllowDomains { get; set; } = new List<string>();
+        /// <summary>资源放行域名：白名单页面加载的第三方资源（CDN 图片/JS/字体、接口域名等）也放行。格式与白名单一致。</summary>
+        public List<string> AllowResourceDomains { get; set; } = new List<string>();
+        /// <summary>true=放行白名单页面引用的第三方资源（请求带 Referer/Origin 且来源是白名单/资源域名时放行）；false=严格白名单。</summary>
+        public bool ReferrerAllowEnabled { get; set; } = true;
         /// <summary>按设备（座位号）单独设置的模式：seat → 是否课堂管控。仅教师端本地使用，不下发给学生端。</summary>
         public Dictionary<string, bool> DeviceModes { get; set; } = new Dictionary<string, bool>();
         /// <summary>按设备（座位号）单独设置的网页解锁密码：seat → 密码。仅教师端本地使用，不下发给学生端。</summary>
@@ -41,6 +45,8 @@ namespace ClassroomNetGuard.Shared
             Version = 1,
             ClassroomOn = true,
             AllowDomains = new List<string>(), // 纯空白名单：默认全部拦截，由教师端按需添加
+            AllowResourceDomains = new List<string>(),
+            ReferrerAllowEnabled = true,
             Download = new DownloadPolicy { Enabled = false, AllowTypes = new List<string> { "pdf", "docx", "pptx" }, MaxSizeMB = 50 }
         };
 
@@ -49,6 +55,8 @@ namespace ClassroomNetGuard.Shared
             Version = Version,
             ClassroomOn = ClassroomOn,
             AllowDomains = AllowDomains.ToList(),
+            AllowResourceDomains = AllowResourceDomains == null ? new List<string>() : AllowResourceDomains.ToList(),
+            ReferrerAllowEnabled = ReferrerAllowEnabled,
             DeviceModes = DeviceModes == null ? null : new Dictionary<string, bool>(DeviceModes),
             DevicePasswords = DevicePasswords == null ? null : new Dictionary<string, string>(DevicePasswords),
             UnlockPassword = UnlockPassword,
@@ -56,19 +64,54 @@ namespace ClassroomNetGuard.Shared
             UpdatedAt = UpdatedAt
         };
 
-        /// <summary>白名单匹配：返回该域名是否被放行。自由模式下全部放行。</summary>
-        /// <summary>
-        /// 放行判定：支持域名（baidu.com 含子域）、通配域（*.edu.cn）、
+        /// <summary>放行判定：支持域名（baidu.com 含子域）、通配域（*.edu.cn）、
         /// IP 地址（192.168.1.50）、IP:端口（192.168.1.50:8000，仅放行该端口）、
-        /// IP 段通配（192.168.1.*）、CIDR（192.168.1.0/24）。
-        /// </summary>
+        /// IP 段通配（192.168.1.*）、CIDR（192.168.1.0/24）。自由模式下全部放行。</summary>
         public bool IsDomainAllowed(string host, int port = 0)
         {
-            if (string.IsNullOrWhiteSpace(host)) return false;
             if (!ClassroomOn) return true;
+            return MatchRuleList(AllowDomains, host, port);
+        }
+
+        /// <summary>资源放行域名判定：与白名单相同格式。自由模式下全部放行。</summary>
+        public bool IsResourceDomainAllowed(string host, int port = 0)
+        {
+            if (!ClassroomOn) return true;
+            return MatchRuleList(AllowResourceDomains, host, port);
+        }
+
+        /// <summary>来源关联放行：请求的 Referer/Origin 指向的域名是白名单或资源放行域名时放行。
+        /// 用于白名单页面加载的第三方子资源（图片/JS/接口/字体等）。带端口匹配，兼容带端口白名单条目。</summary>
+        public bool IsReferrerAllowed(string refererOrOrigin)
+        {
+            if (!ClassroomOn) return true;
+            var (host, port) = ExtractHostPort(refererOrOrigin);
+            if (host == null) return false;
+            return MatchRuleList(AllowDomains, host, port) || MatchRuleList(AllowResourceDomains, host, port);
+        }
+
+        /// <summary>从 Referer / Origin 值提取主机名（小写）与端口（无端口为 0），无法解析时 host 为 null。</summary>
+        public static (string host, int port) ExtractHostPort(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return (null, 0);
+            var v = value.Trim();
+            if (v.Equals("null", StringComparison.OrdinalIgnoreCase)) return (null, 0);
+            var idx = v.IndexOf("://", StringComparison.Ordinal);
+            if (idx >= 0) v = v.Substring(idx + 3);
+            var slash = v.IndexOfAny(new[] { '/', '?' });
+            if (slash >= 0) v = v.Substring(0, slash);
+            if (v.Length == 0) return (null, 0);
+            var (host, port) = SplitHostPort(v.ToLowerInvariant());
+            if (host.Length == 0) return (null, 0);
+            return (host, port);
+        }
+
+        static bool MatchRuleList(List<string> rules, string host, int port)
+        {
+            if (string.IsNullOrWhiteSpace(host)) return false;
             host = host.Trim().ToLowerInvariant();
             var isIp = System.Net.IPAddress.TryParse(host, out _);
-            foreach (var raw in AllowDomains)
+            foreach (var raw in rules ?? new List<string>())
             {
                 var pat = (raw ?? "").Trim().ToLowerInvariant();
                 if (pat.Length == 0) continue;
