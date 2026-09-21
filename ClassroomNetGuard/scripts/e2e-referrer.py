@@ -73,12 +73,13 @@ def teacher_server(stop):
     srv.close()
 
 # ---------- 客户端 ----------
-def raw_req(port, path, referer=None, origin=None, host=None):
+def raw_req(port, path, referer=None, origin=None, host=None, fetch_mode=None):
     s = socket.create_connection(("127.0.0.1", 8888), timeout=8)
     h = (host or "127.0.0.1:%d" % port)
     req = "GET http://%s%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n" % (h, path, h)
     if referer: req += "Referer: %s\r\n" % referer
     if origin: req += "Origin: %s\r\n" % origin
+    if fetch_mode: req += "Sec-Fetch-Mode: %s\r\n" % fetch_mode
     req += "\r\n"
     s.sendall(req.encode())
     out = b""
@@ -111,10 +112,16 @@ def main():
     results.append(check("白名单站点直连(18080)", raw_req(18080, "/"), "200"))
     results.append(check("资源放行域名直连(18081)", raw_req(18081, "/"), "200"))
     results.append(check("第三方无来源(18082)", raw_req(18082, "/"), "403"))
-    results.append(check("第三方+白名单Referer(18082)", raw_req(18082, "/", referer="http://127.0.0.1:18080/page"), "200"))
-    results.append(check("第三方+资源域名Referer(18082)", raw_req(18082, "/", referer="http://127.0.0.1:18081/x.js"), "200"))
-    results.append(check("第三方+非法Referer(18082)", raw_req(18082, "/", referer="http://evil.com/"), "403"))
-    results.append(check("第三方+白名单Origin(18082)", raw_req(18082, "/", origin="http://127.0.0.1:18080"), "200"))
+    # 子资源（图片/JS/接口）：来源关联放行
+    results.append(check("第三方+白名单Referer+no-cors(18082)", raw_req(18082, "/", referer="http://127.0.0.1:18080/page", fetch_mode="no-cors"), "200"))
+    results.append(check("第三方+资源域名Referer+no-cors(18082)", raw_req(18082, "/", referer="http://127.0.0.1:18081/x.js", fetch_mode="no-cors"), "200"))
+    results.append(check("第三方+白名单Origin+cors(18082)", raw_req(18082, "/", origin="http://127.0.0.1:18080", fetch_mode="cors"), "200"))
+    # 文档导航（顶层跳转/iframe）：必须域名本身在白名单，来源关联不放行
+    results.append(check("第三方+白名单Referer+navigate(18082)", raw_req(18082, "/", referer="http://127.0.0.1:18080/page", fetch_mode="navigate"), "403"))
+    results.append(check("第三方+白名单Referer+nested-navigate(18082)", raw_req(18082, "/", referer="http://127.0.0.1:18080/page", fetch_mode="nested-navigate"), "403"))
+    # 无 Sec-Fetch-Mode（curl/命令行伪造 Referer）：不做来源关联放行
+    results.append(check("第三方+白名单Referer+无SecFetch(18082)", raw_req(18082, "/", referer="http://127.0.0.1:18080/page"), "403"))
+    results.append(check("第三方+非法Referer+no-cors(18082)", raw_req(18082, "/", referer="http://evil.com/", fetch_mode="no-cors"), "403"))
 
     stop.set()
     for srv in servers: srv.shutdown()

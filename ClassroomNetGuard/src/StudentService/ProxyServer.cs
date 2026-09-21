@@ -72,6 +72,8 @@ namespace StudentService
             public bool IsConnect;
             /// <summary>请求头中的来源值（Referer/Origin 原始值），用于白名单页面第三方子资源的关联放行。</summary>
             public volatile string ReferrerHost;
+            /// <summary>是否为"文档导航"请求（顶层页面/iframe 加载）：true 时不做来源关联放行，必须域名本身命中白名单。</summary>
+            public volatile bool Navigation;
             public volatile bool ResponseStarted; // 已开始向浏览器写响应（之后只能断开，不能注入）
             public readonly SemaphoreSlim Gate = new SemaphoreSlim(1, 1); // 串行化对该连接的写入
         }
@@ -122,8 +124,8 @@ namespace StudentService
                         if (!st.IsConnect && !st.ResponseStarted && !string.IsNullOrEmpty(st.Host))
                         {
                             // 白名单站点 / 资源放行域名 / 白名单页面引用的第三方子资源：不注入，等正常响应返回；
-                            // 其余：注入拦截页（自动显示"访问已被拦截"）
-                            if (IsAllowedWithReferrer(st.Host, st.Port, st.ReferrerHost))
+                            // 其余（含来源关联放行的文档导航）：注入拦截页（自动显示"访问已被拦截"）
+                            if (IsAllowedWithReferrer(st.Host, st.Port, st.ReferrerHost, st.Navigation))
                                 continue;
                             _ = InjectBlockedAsync(st);
                         }
@@ -204,11 +206,12 @@ namespace StudentService
                 st.Port = hp.port;
                 st.IsConnect = isConnect;
                 st.ReferrerHost = ParseReferrerValue(head); // 白名单页面引用的第三方子资源据此放行
+                st.Navigation = IsDocumentNavigation(head); // 文档导航（顶层/iframe）不做来源关联放行
                 _lastUrl = host;
                 _conn.SetCurrentUrl(host);
 
-                // 放行条件：白名单站点 / 资源放行域名 / 白名单页面引用的第三方子资源（Referer 关联）/ 解锁期间临时放行
-                if (IsAllowedWithReferrer(host, hp.port, st.ReferrerHost) || _unlock.IsActive)
+                // 放行条件：白名单站点 / 资源放行域名 / 白名单页面引用的第三方子资源（非文档导航时的来源关联）/ 解锁期间临时放行
+                if (IsAllowedWithReferrer(host, hp.port, st.ReferrerHost, st.Navigation) || _unlock.IsActive)
                 {
                     using var upstream = new TcpClient { NoDelay = true };
                     await upstream.ConnectAsync(host, hp.port);
@@ -263,14 +266,41 @@ namespace StudentService
 
         // ===== 头部解析 =====
 
-        /// <summary>放行判定（含 Referer 关联）：白名单站点 / 资源放行域名 / 白名单页面引用的第三方子资源。</summary>
-        bool IsAllowedWithReferrer(string host, int port, string referrerHost)
+        /// <summary>放行判定（含来源关联）：白名单站点 / 资源放行域名 / 白名单页面引用的第三方子资源。
+        /// 文档导航（顶层页面/iframe 加载、无 Sec-Fetch-Mode 的程序请求）不做来源关联放行，
+        /// 防止学生从白名单页面点击外链跳转到任意网站、或伪造 Referer 绕过白名单。</summary>
+        bool IsAllowedWithReferrer(string host, int port, string referrerHost, bool navigation)
         {
             if (_policy.IsDomainAllowed(host, port)) return true;
             if (_policy.IsResourceDomainAllowed(host, port)) return true;
-            if (_policy.ReferrerAllowEnabled && !string.IsNullOrWhiteSpace(referrerHost))
+            if (!navigation && _policy.ReferrerAllowEnabled && !string.IsNullOrWhiteSpace(referrerHost))
                 return _policy.IsReferrerAllowed(referrerHost);
             return false;
+        }
+
+        /// <summary>判断请求是否为"文档导航"（顶层页面跳转 / iframe 加载）。
+        /// 现代浏览器所有请求都带 Sec-Fetch-Mode：navigate=顶层导航、nested-navigate=iframe；
+        /// 其余值（no-cors/cors/same-origin/websocket 等）为页面引用的子资源。
+        /// 无该头（非浏览器程序，如 curl）一律视为导航——不允许来源关联放行。</summary>
+        static bool IsDocumentNavigation(string head)
+        {
+            try
+            {
+                var lines = head.Split('\n');
+                foreach (var raw in lines)
+                {
+                    var line = raw.TrimEnd('\r');
+                    if (line.Length == 0) continue;
+                    var colon = line.IndexOf(':');
+                    if (colon <= 0) continue;
+                    if (!line.Substring(0, colon).Trim().Equals("Sec-Fetch-Mode", StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    var mode = line.Substring(colon + 1).Trim().ToLowerInvariant();
+                    return mode == "navigate" || mode == "nested-navigate";
+                }
+            }
+            catch { }
+            return true; // 无 Sec-Fetch-Mode：保守视为导航
         }
 
         /// <summary>从请求头提取 Referer/Origin 的原始值（供第三方子资源关联放行）。无来源或无法解析返回 null。</summary>

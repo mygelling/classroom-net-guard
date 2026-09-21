@@ -52,13 +52,22 @@ namespace StudentTray
         {
             var st = PipeClient.GetStatus();
             var serviceOk = st != null;
+            var proxy = "127.0.0.1:" + NetGuardConstants.StudentProxyPort;
 
-            if (serviceOk && !_proxySet)
+            if (serviceOk)
             {
-                ProxySetter.Enable("127.0.0.1:" + NetGuardConstants.StudentProxyPort);
-                _proxySet = true;
+                if (!_proxySet)
+                {
+                    ProxySetter.Enable(proxy);
+                    _proxySet = true;
+                }
+                else if (!ProxySetter.IsEnabled(proxy))
+                {
+                    // 学生关闭/篡改了系统代理（会导致流量绕过白名单）→ 立即恢复
+                    ProxySetter.Enable(proxy);
+                }
             }
-            else if (!serviceOk && _proxySet)
+            else if (_proxySet)
             {
                 ProxySetter.Restore();
                 _proxySet = false;

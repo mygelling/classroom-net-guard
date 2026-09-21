@@ -35,9 +35,29 @@ namespace StudentTray
                 }
                 k.SetValue("ProxyEnable", 1);
                 k.SetValue("ProxyServer", proxyAddress);
-                k.SetValue("ProxyOverride", "<local>");
+                // 仅本机回环直连（本地策略 API/解锁页面），其余全部走代理——
+                // 不能使用 <local>（否则所有局域网地址直连、白名单对内网完全失效）
+                k.SetValue("ProxyOverride", "127.0.0.1;localhost");
             }
             Refresh();
+        }
+
+        /// <summary>检查当前系统代理是否仍指向本地管控代理（防学生手动关闭/篡改代理导致绕过白名单）。</summary>
+        public static bool IsEnabled(string proxyAddress)
+        {
+            try
+            {
+                using (var k = Registry.CurrentUser.OpenSubKey(SubKey, false))
+                {
+                    if (k == null) return false;
+                    var en = Convert.ToInt32(k.GetValue("ProxyEnable", 0)) != 0;
+                    var server = ((string)k.GetValue("ProxyServer", "") ?? "").Trim();
+                    var over = ((string)k.GetValue("ProxyOverride", "") ?? "").Trim();
+                    return en && server.Equals(proxyAddress, StringComparison.OrdinalIgnoreCase)
+                        && over.Contains("127.0.0.1");
+                }
+            }
+            catch { return false; }
         }
 
         public static void Restore()
