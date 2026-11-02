@@ -52,8 +52,8 @@ namespace TeacherConsole
         {
             TxtPwd.Text = DefaultPassword.Generate(_dev.Seat, DateTime.Now);
             RefreshPwdState();
-            TxtPwdState.Text = "已生成默认密码（计算机名 × 当天日期取后 6 位）：" + TxtPwd.Text +
-                               "。点“设置”后生效；该密码每天自动变化，需重新生成。";
+            TxtPwdState.Text = "已生成随机 8 位解锁密码：" + TxtPwd.Text +
+                               "。点“设置”后生效；教师端每次启动会重新随机生成全部密码。";
         }
 
         void Relock_Click(object sender, RoutedEventArgs e)

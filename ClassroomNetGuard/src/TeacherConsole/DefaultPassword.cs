@@ -1,25 +1,17 @@
 using System;
-using System.Text;
 
 namespace TeacherConsole
 {
     /// <summary>
-    /// 默认解锁密码算法：计算机名逐字符转数字求和 × 当天日期(yyyyMMdd)逐字符转数字求和，
-    /// 乘积取后 6 位（不足 6 位前补 0）。每天每个计算机名生成独立密码。
+    /// 解锁密码生成：随机 8 位数字（首位非 0，范围 10000000–99999999）。
+    /// 教师端每次启动时为所有学生机重新随机生成；新学生机上线时自动生成。
+    /// 保留 (computerName, date) 签名以便沿用既有调用点。
     /// </summary>
     public static class DefaultPassword
     {
         public static string Generate(string computerName, DateTime date)
         {
-            long sumName = 0;
-            foreach (var c in computerName ?? "") sumName += c;
-
-            var ds = date.ToString("yyyyMMdd");
-            long sumDate = 0;
-            foreach (var c in ds) sumDate += c;
-
-            var product = sumName * sumDate;
-            return (product % 1000000).ToString("D6");
+            return Random.Shared.Next(10000000, 100000000).ToString();
         }
     }
 }

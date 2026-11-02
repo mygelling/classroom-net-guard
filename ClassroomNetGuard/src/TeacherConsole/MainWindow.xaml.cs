@@ -62,6 +62,8 @@ namespace TeacherConsole
 
             _ = _server.StartAsync();
             _discovery.Start();
+            // 每次启动自动更新所有学生机的解锁密码（随机 8 位数字），并立即下发给已在线学生机
+            RefreshAllPasswords();
             TxtServer.Text = "服务运行中 · TCP " + TcpServer.DefaultPort + " · UDP " + DiscoveryServer.DiscoveryPort;
             TxtServer.Foreground = new SolidColorBrush(Color.FromRgb(0x7F, 0xE0, 0xC4));
             UpdateStats();
@@ -72,6 +74,27 @@ namespace TeacherConsole
         {
             _server.Stop();
             _discovery.Stop();
+        }
+
+        /// <summary>
+        /// 每次教师端启动：为所有已记录的学生机重新生成随机 8 位解锁密码并持久化，
+        /// 立即向已在线学生机下发新密码；尚未上线/新加入的学生机在连接教师端时自动生成。
+        /// </summary>
+        void RefreshAllPasswords()
+        {
+            if (_policy == null) return;
+            if (_policy.DevicePasswords == null) _policy.DevicePasswords = new Dictionary<string, string>();
+            foreach (var seat in _policy.DevicePasswords.Keys.ToList())
+                _policy.DevicePasswords[seat] = DefaultPassword.Generate(seat, DateTime.Now);
+            PolicyStore.Save(_policy);
+            foreach (var kv in _server.Sessions)
+            {
+                if (!kv.Value.Closed)
+                    _ = kv.Value.SendAsync(WireMessage.Create(WireMessage.TPolicy, PolicyFor(kv.Value.Device)));
+            }
+            foreach (var d in _devices)
+                d.UnlockPassword = _policy.DevicePasswords.TryGetValue(d.Seat, out var pw) ? pw : "";
+            AddLog("教师端", "启动：已自动更新全部学生机解锁密码（随机 8 位）", "策略");
         }
 
         // ===== 服务器事件 =====
@@ -92,14 +115,14 @@ namespace TeacherConsole
                 }
                 dev.Online = true;
                 dev.LastSeen = DateTime.Now;
-                // 自动设置默认解锁密码：设备上线且从未设置过密码时，按“计算机名×当天日期取后6位”自动生成
-                // （每机独立、每天变化），并随策略下发，无需教师逐台手动设置。
+                // 自动设置解锁密码：设备上线且尚未设置过密码时，生成随机 8 位数字密码
+                // （每机独立；教师端每次启动会统一重新随机生成），并随策略下发，无需教师逐台手动设置。
                 if (_policy.DevicePasswords == null) _policy.DevicePasswords = new Dictionary<string, string>();
                 if (!_policy.DevicePasswords.ContainsKey(dev.Seat))
                 {
                     _policy.DevicePasswords[dev.Seat] = DefaultPassword.Generate(dev.Seat, DateTime.Now);
                     PolicyStore.Save(_policy);
-                    AddLog("教师端", dev.Seat + " 自动设置默认解锁密码", "策略");
+                    AddLog("教师端", dev.Seat + " 自动生成解锁密码", "策略");
                 }
                 // 同步该设备单独设置的模式（未单独设置时跟随全局模式）与解锁密码
                 dev.ClassroomOn = _policy.DeviceModes != null && _policy.DeviceModes.TryGetValue(dev.Seat, out var on)
@@ -303,7 +326,7 @@ namespace TeacherConsole
 
         void ApplyRelock(DeviceViewModel dev) => _ = ApplyRelockAsync(dev);
 
-        /// <summary>导出全部学生机的解锁密码清单（CSV）：已设置密码用实际值，未设置的生成当天默认密码。</summary>
+        /// <summary>导出全部学生机的解锁密码清单（CSV）：已设置密码用实际值，未设置的生成随机 8 位密码。</summary>
         void ExportPasswords_Click(object sender, RoutedEventArgs e)
         {
             if (_devices.Count == 0)
@@ -318,7 +341,7 @@ namespace TeacherConsole
             {
                 var has = !string.IsNullOrWhiteSpace(d.UnlockPassword);
                 var pwd = has ? d.UnlockPassword : DefaultPassword.Generate(d.Seat, today);
-                var state = has ? "已设置" : "默认密码(未应用)";
+                var state = has ? "已设置" : "自动生成(未应用)";
                 sb.AppendLine(d.Seat + "," + d.Ip + "," + pwd + "," + state);
             }
             var dlg = new Microsoft.Win32.SaveFileDialog
@@ -332,7 +355,7 @@ namespace TeacherConsole
                 System.IO.File.WriteAllText(dlg.FileName, sb.ToString(), new System.Text.UTF8Encoding(true));
                 MessageBox.Show(this, "已导出到：\n" + dlg.FileName +
                     "\n\n共 " + _devices.Count + " 台设备。" +
-                    "\n提示：默认密码 = 计算机名转数字 × 当天日期转数字 取后 6 位，每天自动变化，需要分发给学生请当天导出。",
+                    "\n提示：解锁密码为随机 8 位数字，教师端每次启动自动全部更新，请以本次导出为准分发给学生。",
                     "导出完成");
             }
             catch (Exception ex)

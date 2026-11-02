@@ -47,9 +47,9 @@
             <Button DockPanel.Dock="Right" Content="设置" Width="72" Height="26" Margin="8,0,0,0"
                     Background="#0E7C66" Foreground="White" FontWeight="Bold" BorderThickness="0"
                     Click="SetPwd_Click" ToolTip="设置后学生可在拦截页输入该密码临时解锁上网 30 分钟；留空点设置=清除"/>
-            <Button DockPanel.Dock="Right" Content="默认密码" Width="86" Height="26" Margin="8,0,0,0"
+            <Button DockPanel.Dock="Right" Content="随机密码" Width="86" Height="26" Margin="8,0,0,0"
                     Background="#E4E9E7" Foreground="#1A2622" FontWeight="Bold" BorderThickness="0"
-                    Click="GenDefaultPwd_Click" ToolTip="按计算机名 + 当天日期自动生成（取后 6 位），填入后点“设置”生效"/>
+                    Click="GenDefaultPwd_Click" ToolTip="生成随机 8 位数字解锁密码，填入后点“设置”生效"/>
             <TextBox x:Name="TxtPwd" FontFamily="Consolas" FontSize="12.5" Height="26" VerticalContentAlignment="Center"
                      Padding="6,0" BorderBrush="#D8E0DC" ToolTip="留空并点设置=清除解锁密码"/>
         </DockPanel>

@@ -116,7 +116,7 @@
                     <Button x:Name="ExportBtn" Content="导出密码"
                             Background="#22332E" Foreground="#CFE3DC" FontSize="12.5" Padding="14,6" Margin="10,0,0,0"
                             BorderThickness="0" Click="ExportPasswords_Click"
-                            ToolTip="导出全部学生机的解锁密码清单（CSV）；未设置的生成当天默认密码"/>
+                            ToolTip="导出全部学生机的解锁密码清单（CSV）；每次启动自动更新为随机 8 位，请以本次导出为准分发给学生"/>
                 </StackPanel>
             </DockPanel>
         </Border>
